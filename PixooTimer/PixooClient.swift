@@ -128,4 +128,35 @@ class PixooClient {
             return false
         }
     }
+
+    /// Quick connection check with shorter timeout for startup
+    func quickCheck() async -> Int? {
+        guard isConfigured else { return nil }
+
+        // Create a session with shorter timeout for quick check
+        let quickConfig = URLSessionConfiguration.default
+        quickConfig.timeoutIntervalForRequest = 1.5
+        quickConfig.timeoutIntervalForResource = 1.5
+        let quickSession = URLSession(configuration: quickConfig)
+
+        guard let url = URL(string: "http://\(ipAddress)/post") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["Command": "Channel/GetIndex"])
+
+        do {
+            let (data, response) = try await quickSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let channel = json["SelectIndex"] as? Int else {
+                return nil
+            }
+            return channel
+        } catch {
+            return nil
+        }
+    }
 }

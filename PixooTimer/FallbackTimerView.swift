@@ -7,6 +7,33 @@
 
 import SwiftUI
 
+struct PieSlice: Shape {
+    var endAngle: Angle
+
+    var animatableData: Double {
+        get { endAngle.degrees }
+        set { endAngle = .degrees(newValue) }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+
+        path.move(to: center)
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-90) + endAngle,
+            clockwise: false
+        )
+        path.closeSubpath()
+
+        return path
+    }
+}
+
 struct FallbackTimerView: View {
     let minutes: Int
     let progress: Double
@@ -35,9 +62,7 @@ struct FallbackTimerView: View {
 
             // Pie chart (remaining time) - darker than background
             if !isFlashing {
-                Circle()
-                    .trim(from: 0, to: 1.0 - progress)
-                    .rotation(.degrees(-90))
+                PieSlice(endAngle: .degrees((1.0 - progress) * 360))
                     .fill(pieColor)
                     .frame(width: 90, height: 90)
             }

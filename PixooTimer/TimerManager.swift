@@ -8,6 +8,7 @@
 import Foundation
 import AppKit
 import Combine
+import UserNotifications
 
 enum DisplayMode {
     case pixoo(originalChannel: Int)
@@ -54,6 +55,20 @@ class TimerManager: ObservableObject {
 
     init(pixooClient: PixooClient) {
         self.pixooClient = pixooClient
+        setupNotificationObserver()
+    }
+
+    private func setupNotificationObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .startTimerFromNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let minutes = notification.userInfo?["minutes"] as? Int else { return }
+            Task { @MainActor in
+                await self?.startTimer(minutes: minutes)
+            }
+        }
     }
 
     // MARK: - Public Methods
@@ -68,24 +83,18 @@ class TimerManager: ObservableObject {
         // Stop existing timer
         stopDisplayTimer()
 
-        // Try to connect to Pixoo
+        // Try to connect to Pixoo (quick check with 1.5s timeout)
         let displayMode: DisplayMode
-        if pixooClient.isConfigured {
-            do {
-                let channel: Int
-                if let existing = originalChannel {
-                    channel = existing
-                } else {
-                    channel = try await pixooClient.getCurrentChannel()
-                }
-                try await pixooClient.resetAnimationId()
-
-                displayMode = .pixoo(originalChannel: channel)
-            } catch {
-                // Pixoo unavailable, use fallback
-                displayMode = .macFallback
-            }
+        if let existing = originalChannel {
+            // Already connected, reuse channel
+            try? await pixooClient.resetAnimationId()
+            displayMode = .pixoo(originalChannel: existing)
+        } else if let channel = await pixooClient.quickCheck() {
+            // Pixoo responded quickly
+            try? await pixooClient.resetAnimationId()
+            displayMode = .pixoo(originalChannel: channel)
         } else {
+            // Pixoo unavailable or too slow, use fallback
             displayMode = .macFallback
         }
 
@@ -182,9 +191,12 @@ class TimerManager: ObservableObject {
     }
 
     private func timerCompleted() async {
-        guard case .running(_, _, let displayMode) = state else { return }
+        guard case .running(_, let totalMinutes, let displayMode) = state else { return }
 
         stopDisplayTimer()
+
+        // Send notification
+        sendCompletionNotification(minutes: totalMinutes)
 
         switch displayMode {
         case .pixoo(let originalChannel):
@@ -223,5 +235,22 @@ class TimerManager: ObservableObject {
         lastDisplayedMinute = -1
 
         onStateChange?()
+    }
+
+    private func sendCompletionNotification(minutes: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Timer Complete"
+        content.body = "\(minutes)-minute timer complete"
+        content.categoryIdentifier = "TIMER_COMPLETE"
+        content.sound = nil  // Use existing buzzer/sound
+        content.userInfo = ["duration": minutes]  // For "Repeat" action
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil  // Deliver immediately
+        )
+
+        UNUserNotificationCenter.current().add(request)
     }
 }
