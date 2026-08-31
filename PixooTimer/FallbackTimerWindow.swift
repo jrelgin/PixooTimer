@@ -42,12 +42,27 @@ class FallbackTimerWindow {
         window?.isMovableByWindowBackground = true
         window?.hasShadow = true
 
-        // Restore saved position or default to bottom-right
-        if let savedFrame = UserDefaults.standard.string(forKey: windowSizeKey),
-           let frameRect = NSRectFromString(savedFrame) as NSRect? {
-            window?.setFrameOrigin(frameRect.origin)
+        // Restore saved position, but only if it still lands on a real screen.
+        // Display arrangements change (monitor moved to the other side, laptop
+        // undocked), which can strand the saved origin in dead space where the
+        // window is invisible and unreachable.
+        let savedString = UserDefaults.standard.string(forKey: windowSizeKey)
+        let savedFrame = savedString.map(NSRectFromString) ?? .zero
+        if !savedFrame.isEmpty, isSufficientlyVisible(savedFrame) {
+            window?.setFrameOrigin(savedFrame.origin)
         } else {
             positionBottomRight()
+        }
+
+        // Displays can change while the app is running
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.ensureOnScreen()
+            }
         }
 
         // Save position when window moves
@@ -61,6 +76,25 @@ class FallbackTimerWindow {
                 self?.saveWindowPosition()
             }
         }
+    }
+
+    /// A restored frame is only usable if a meaningful part of it is on a screen.
+    /// Requiring half the window keeps a slightly-clipped position (which the user
+    /// chose) while rejecting one that is effectively invisible.
+    private func isSufficientlyVisible(_ frame: NSRect) -> Bool {
+        let required = frame.width * frame.height * 0.5
+        return NSScreen.screens.contains { screen in
+            let overlap = screen.visibleFrame.intersection(frame)
+            return !overlap.isNull && overlap.width * overlap.height >= required
+        }
+    }
+
+    /// Pull the window back to a visible spot if the screen layout stranded it.
+    private func ensureOnScreen() {
+        guard let frame = window?.frame else { return }
+        guard !isSufficientlyVisible(frame) else { return }
+        positionBottomRight()
+        saveWindowPosition()
     }
 
     private func positionBottomRight() {
